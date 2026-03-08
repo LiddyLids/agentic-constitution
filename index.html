@@ -435,6 +435,83 @@
       font-size: 0.8em;
       margin-left: 6px;
     }
+
+    /* ===== Mobile Reader Mode (JS adds .mobile-reader to <body>) ===== */
+    /* Skip StPageFlip; show one full-screen scrollable page at a time.  */
+
+    body.mobile-reader {
+      background: linear-gradient(104deg, #f2e8d2 0%, #f8f0de 100%);
+    }
+
+    body.mobile-reader .scene {
+      display: block;
+      padding: 0;
+      min-height: unset;
+    }
+
+    body.mobile-reader .book-wrap {
+      width: 100vw;
+      height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+      padding: 0;
+      background: transparent;
+    }
+
+    body.mobile-reader #book {
+      width: 100%;
+      height: 100%;
+      border-radius: 0;
+      overflow: visible;
+    }
+
+    /* All pages hidden; only .active shows */
+    body.mobile-reader .page {
+      display: none;
+      width: 100%;
+      height: 100%;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+      /* extra bottom padding so content clears the fixed controls bar */
+      padding: 28px 22px calc(72px + env(safe-area-inset-bottom, 0px));
+      border-radius: 0;
+    }
+
+    body.mobile-reader .page.active {
+      display: flex;
+    }
+
+    /* Let .leaf grow naturally so content is scrollable */
+    body.mobile-reader .page .leaf {
+      overflow: visible;
+      height: auto;
+    }
+
+    /* Full-width fixed controls bar at the bottom */
+    body.mobile-reader .controls {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      width: 100%;
+      transform: none !important;
+      border-radius: 0;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 8px 12px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      background: rgba(18, 12, 8, 0.92);
+      backdrop-filter: blur(8px);
+    }
+
+    body.mobile-reader .controls button,
+    body.mobile-reader .controls-btn-toc {
+      flex: 1;
+      padding: 8px 6px;
+      font-size: 0.72rem;
+      min-height: 40px;
+    }
   </style>
 </head>
 <body>
@@ -1051,52 +1128,117 @@
     (function () {
       'use strict';
 
-      const bookEl  = document.getElementById('book');
-      const prevBtn = document.getElementById('prevBtn');
-      const nextBtn = document.getElementById('nextBtn');
-      const status  = document.getElementById('status');
+      var bookEl  = document.getElementById('book');
+      var prevBtn = document.getElementById('prevBtn');
+      var nextBtn = document.getElementById('nextBtn');
+      var status  = document.getElementById('status');
 
-      // Initialise StPageFlip (exposed as St.PageFlip by the CDN bundle)
-      const pageFlip = new St.PageFlip(bookEl, {
-        width:  460,
-        height: 640,
-        size:   'stretch',
-        minWidth:  200,
-        maxWidth:  520,
-        minHeight: 280,
-        maxHeight: 740,
-        drawShadow:          true,
-        flippingTime:        920,
-        usePortrait:         true,   // collapses to single-page on narrow screens
-        startZIndex:         0,
-        autoSize:            true,
-        maxShadowOpacity:    0.5,
-        showCover:           true,   // first & last pages display as solo covers
-        mobileScrollSupport: false,
-        swipeDistance:       10,
-        clickEventForward:   true,
-        useMouseEvents:      true,
-      });
+      // Shared TOC elements (declared early so mobile showPage can reference them)
+      var tocShelf    = document.getElementById('tocShelf');
+      var tocToggle   = document.getElementById('tocToggle');
+      var tocClose    = document.getElementById('tocClose');
+      var tocBackdrop = document.getElementById('tocBackdrop');
+      var tocNav      = document.getElementById('tocNav');
 
-      pageFlip.loadFromHTML(document.querySelectorAll('.page'));
+      var isMobile = window.innerWidth < 640;
+      var totalPages, getPage, goToPage;
 
-      function updateUI() {
-        const curr  = pageFlip.getCurrentPageIndex();
-        const total = pageFlip.getPageCount();
-        status.textContent   = 'Page ' + (curr + 1) + ' of ' + total;
-        prevBtn.disabled     = curr <= 0;
-        nextBtn.disabled     = curr >= total - 1;
+      // =====================================================================
+      // MOBILE: simple full-screen single-page reader (no StPageFlip)
+      // =====================================================================
+      if (isMobile) {
+        document.body.classList.add('mobile-reader');
+
+        var allPages  = Array.from(document.querySelectorAll('.page'));
+        totalPages    = allPages.length;
+        var mobileIdx = 0;
+
+        function showPage(n) {
+          if (n < 0 || n >= totalPages) return;
+          allPages[mobileIdx].classList.remove('active');
+          mobileIdx = n;
+          allPages[n].classList.add('active');
+          allPages[n].scrollTop = 0;
+          updateUI();
+        }
+
+        getPage  = function () { return mobileIdx; };
+        goToPage = function (n) { showPage(n); };
+
+        prevBtn.addEventListener('click', function () { showPage(mobileIdx - 1); });
+        nextBtn.addEventListener('click', function () { showPage(mobileIdx + 1); });
+
+        // Swipe left/right to navigate pages; vertical scroll passes through
+        var tx = 0, ty = 0;
+        document.addEventListener('touchstart', function (e) {
+          tx = e.touches[0].clientX;
+          ty = e.touches[0].clientY;
+        }, { passive: true });
+        document.addEventListener('touchend', function (e) {
+          var dx = e.changedTouches[0].clientX - tx;
+          var dy = e.changedTouches[0].clientY - ty;
+          // Only navigate if swipe is more horizontal than vertical
+          if (Math.abs(dx) > Math.abs(dy) * 1.2 && Math.abs(dx) > 50) {
+            if (dx < 0) showPage(mobileIdx + 1);
+            else        showPage(mobileIdx - 1);
+          }
+        }, { passive: true });
+
+        showPage(0);
+
+      // =====================================================================
+      // DESKTOP: StPageFlip canvas flipbook
+      // =====================================================================
+      } else {
+        var pageFlip = new St.PageFlip(bookEl, {
+          width:  460,
+          height: 640,
+          size:   'stretch',
+          minWidth:  200,
+          maxWidth:  520,
+          minHeight: 280,
+          maxHeight: 740,
+          drawShadow:          true,
+          flippingTime:        920,
+          usePortrait:         true,
+          startZIndex:         0,
+          autoSize:            true,
+          maxShadowOpacity:    0.5,
+          showCover:           true,
+          mobileScrollSupport: false,
+          swipeDistance:       10,
+          clickEventForward:   true,
+          useMouseEvents:      true,
+        });
+
+        pageFlip.loadFromHTML(document.querySelectorAll('.page'));
+        totalPages = pageFlip.getPageCount();
+
+        getPage  = function () { return pageFlip.getCurrentPageIndex(); };
+        goToPage = function (n) { pageFlip.flip(n, 'bottom'); };
+
+        pageFlip.on('flip', function () {
+          updateUI();
+          if (tocShelf.classList.contains('open')) syncTocHighlight();
+        });
+        pageFlip.on('changeState', updateUI);
+
+        prevBtn.addEventListener('click', function () { pageFlip.flipPrev('bottom'); });
+        nextBtn.addEventListener('click', function () { pageFlip.flipNext('bottom'); });
+
+        updateUI();
       }
 
-      pageFlip.on('flip',        updateUI);
-      pageFlip.on('changeState', updateUI);
+      function updateUI() {
+        var curr = getPage();
+        status.textContent = 'Page ' + (curr + 1) + ' of ' + totalPages;
+        prevBtn.disabled   = curr <= 0;
+        nextBtn.disabled   = curr >= totalPages - 1;
+      }
 
-      prevBtn.addEventListener('click', function () { pageFlip.flipPrev('bottom'); });
-      nextBtn.addEventListener('click', function () { pageFlip.flipNext('bottom'); });
-
-      updateUI();
-
-      // ---- Table of Contents ----
+      // =====================================================================
+      // Table of Contents (shared between mobile and desktop)
+      // =====================================================================
       var TOC_ENTRIES = [
         { label: 'Front Cover',                        page: 0  },
         { label: 'Preamble',                           page: 1  },
@@ -1134,14 +1276,7 @@
         { label: 'Back Cover',                         page: 33 },
       ];
 
-      var tocShelf    = document.getElementById('tocShelf');
-      var tocToggle   = document.getElementById('tocToggle');
-      var tocClose    = document.getElementById('tocClose');
-      var tocBackdrop = document.getElementById('tocBackdrop');
-      var tocNav      = document.getElementById('tocNav');
-
-      // Build entry buttons
-      TOC_ENTRIES.forEach(function(entry) {
+      TOC_ENTRIES.forEach(function (entry) {
         var btn = document.createElement('button');
         btn.className = 'toc-entry' + (entry.indent ? ' indent-1' : '');
         btn.dataset.page = String(entry.page);
@@ -1150,8 +1285,8 @@
         pn.textContent = entry.page + 1;
         btn.textContent = entry.label;
         btn.appendChild(pn);
-        btn.addEventListener('click', function() {
-          pageFlip.flip(entry.page, 'bottom');
+        btn.addEventListener('click', function () {
+          goToPage(entry.page);
           closeToc();
         });
         tocNav.appendChild(btn);
@@ -1169,10 +1304,10 @@
       }
 
       function syncTocHighlight() {
-        var curr = pageFlip.getCurrentPageIndex();
+        var curr = getPage();
         var entries = tocNav.querySelectorAll('.toc-entry');
         var lastMatch = null;
-        entries.forEach(function(btn) {
+        entries.forEach(function (btn) {
           var pg = Number(btn.dataset.page);
           btn.classList.toggle('active', pg === curr);
           if (pg === curr) lastMatch = btn;
@@ -1180,14 +1315,12 @@
         if (lastMatch) lastMatch.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       }
 
-      tocToggle.addEventListener('click', function() {
+      tocToggle.addEventListener('click', function () {
         if (tocShelf.classList.contains('open')) { closeToc(); } else { openToc(); }
       });
       tocClose.addEventListener('click', closeToc);
       tocBackdrop.addEventListener('click', closeToc);
 
-      // Keep highlight in sync while shelf is open
-      pageFlip.on('flip', function() { if (tocShelf.classList.contains('open')) syncTocHighlight(); });
     }());
   </script>
 </body>
